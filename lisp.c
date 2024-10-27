@@ -1,20 +1,18 @@
-#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <t1lib.h>
-#include <wchar.h>
+
 
 #define MAXVARCOUNT 65536
 #define MAXARGCOUNT 8
 #define MAXFUNCOUNT 512
 
 typedef enum toktype{ 
-	FUNC,
-	ARG,
-	DEPTHUP,
-	DEPTHDOWN,
-	NIL
+	FUNC = 0,
+	ARG = 1,
+	DEPTHUP = 2,
+	DEPTHDOWN = 3,
+	NIL = -1,
 } toktype;
 
 typedef struct dictionaryll {
@@ -32,6 +30,7 @@ typedef struct lispcodenode {
 	int funcid;
 	lispll *literalarguments[MAXARGCOUNT];
 	int vararguments[MAXARGCOUNT];
+	char *varargumentsnames[MAXARGCOUNT];
 	struct lispcodenode *functionargs[MAXARGCOUNT];
 } lispcodenode;
 
@@ -39,24 +38,22 @@ lispll *variables[MAXVARCOUNT]; // a vairables id is just its index
 char *varnames[MAXVARCOUNT];
 int varidptr = 0;
 
-/* function id's
- * 0 - def 
- * 1 - set
- * 2 - add
- * 3 - sub
- * 4 - print
-*/
-
 char *builtinfunctions[] = {
-	"def",
-	"set",
-	"+",
-	"-",
-	"print",
-};
+	"def", // takes a string litteral varname and a starting value // 0
+	"set", // takes a var and a value // 1
+	"+", // takes 2 values // 2
+	"-", // takes 2 values // 3 
+	"printint", // takes 1 value // 4
+	"*", // takes 2 values // 5
+	"/", // takes 2 values // 6
+	"%", // takes 2 values // 7
+	"defproc", // takes a string litteral name // 8
+	"endproc", // takes nothing // 9
+	"printstr" // takes a value that is a string // 10
+}; 
 
 lispcodenode *functions[MAXFUNCOUNT]; // a functions id is just its index
-int funcidptr = 5;
+int funcidptr = 0;
 
 size_t lllen(lispll *ll){
 	if (ll == NULL) return 0;
@@ -78,21 +75,31 @@ char *fromlltocstr(lispll *ll){
 	return str;
 }
 
-lispll *exec(lispcodenode *code); // for recursion
+				      
+int getvarid(char *name){
+	int ptr = 0;
+	while (varnames[ptr] != NULL && strcmp(varnames[ptr], name) != 0) ptr++;
+	free(name);
+
+	return ptr;
+}
+
+lispll *lispexec(lispcodenode *code); // for recursion
 
 lispll *getargasvarat(lispcodenode *code, int index){
 	if (code->functionargs[index] != NULL){
-		lispll *tmp = exec(code->functionargs[index]);
+		lispll *tmp = lispexec(code->functionargs[index]);
 		if (tmp != NULL) return tmp;
 		exit(1);
-	} else if (code->vararguments[index] != -1){
-		return variables[code->vararguments[index]];
+	} else if (code->varargumentsnames[index] != NULL){
+		return variables[getvarid(code->varargumentsnames[index])];
 	} else {
 		return code->literalarguments[index];
 	}
 }
 
-lispll *exec(lispcodenode *code){
+lispll *lispexec(lispcodenode *code){
+	if (code == NULL) return NULL;
 	lispll *newvar, *var1, *var2;
 	int ptr;
 	char *varname1, varname2;
@@ -101,15 +108,13 @@ lispll *exec(lispcodenode *code){
 			newvar = malloc(sizeof(lispll));
 			variables[varidptr] = newvar;
 			varnames[varidptr] = fromlltocstr(getargasvarat(code, 0));
+			memcpy(newvar, getargasvarat(code, 1), sizeof(lispll));
+
 			varidptr++;
 			break;
 		case 1:
-			ptr = 0;
-			varname1 = fromlltocstr(getargasvarat(code, 0));
-			while (strcmp(varnames[ptr], varname1) != 0) ptr++; 
-			free(varname1);
-			
-			variables[ptr] = getargasvarat(code, 1);
+			var1 = getargasvarat(code, 0);
+			memcpy(var1, getargasvarat(code, 1), sizeof(lispll));
 
 			break;
 		case 2:
@@ -132,6 +137,38 @@ lispll *exec(lispcodenode *code){
 			newvar = getargasvarat(code, 0);
 			printf("%d\n", newvar->data);
 			break;
+		case 5:
+			var1 = getargasvarat(code, 0);
+			var2 = getargasvarat(code, 1);
+
+			newvar = malloc(sizeof(lispll));
+			newvar->data = var1->data * var2->data;
+			return newvar;
+			break;
+		case 6:
+			var1 = getargasvarat(code, 0);
+			var2 = getargasvarat(code, 1);
+
+			newvar = malloc(sizeof(lispll));
+			newvar->data = var1->data / var2->data;
+			return newvar;
+			break;
+		case 7:
+			var1 = getargasvarat(code, 0);
+			var2 = getargasvarat(code, 1);
+
+			newvar = malloc(sizeof(lispll));
+			newvar->data = var1->data % var2->data;
+			return newvar;
+			break;
+		case 8:
+			break;
+		case 9:
+			break;
+		case 10:
+			newvar = getargasvarat(code, 0);
+			printf("%s\n", fromlltocstr(newvar));
+			break;
 		default:
 			exit(3);
 			break;
@@ -140,7 +177,7 @@ lispll *exec(lispcodenode *code){
 }
 
 int readlen = 0;
-//# returns an alocated string that is cut at the first ocurence of one of the chars from cs, and stores the length it read into readlen
+//# returns an allocated string that is cut at the first ocurence of one of the chars from cs, and stores the length it read into readlen
 char *readuntil(char *s, char* cs){ 
 	char *out = malloc(strlen(s)+1);
 	strcpy(out, s);
@@ -156,33 +193,42 @@ char *readuntil(char *s, char* cs){
 
 int getfuncid(char *func){
 	for (int i = 0; i < MAXFUNCOUNT; i++){
-		if (strcmp(func, builtinfunctions[i])) return i;
-		// should do something for a user defined function here
+		if (builtinfunctions[i] != NULL){
+			if (strcmp(func, builtinfunctions[i]) == 0){
+				return i;
+			}
+		} else return -1;
 	}
 	return -1; 
 }
 
-int getvarid(char *name){
-	int ptr = 0;
-	while (strcmp(varnames[ptr], name) != 0) ptr++;  // fix this
-	free(name);
-
-	return ptr;
-}
 
 lispll *litteraltoll(char *litteral){
 	lispll *ll = malloc(sizeof(lispll));
-	errno = 0;
-	ll->data = strtol(litteral, NULL, 10);
-	if (errno == 0)
+	if (litteral[0] == '"'){
+		lispll *tmp = ll;
+loop:
+		litteral++;
+		if (litteral[0] != '"') {
+			tmp->data = litteral[0];		
+			tmp->next = malloc(sizeof(lispll));
+			tmp = tmp->next;
+			goto loop;
+		}
 		return ll;
-	else {
-		free(ll);
-		return NULL;
+	} else {
+		char *eptr;
+		ll->data = strtol(litteral, &eptr, 10);
+		if (eptr != litteral)
+			return ll;
+		else {
+			free(ll);
+			return NULL;
+		}
 	}
 }
 
-lispcodenode *parse(dictionaryll *tokens){
+lispcodenode *lispparse(dictionaryll *tokens){
 	dictionaryll *token = tokens;
 	if (tokens == NULL) return NULL;
 
@@ -191,15 +237,25 @@ lispcodenode *parse(dictionaryll *tokens){
 	int argcount = 0;
 
 	while (token != NULL){
-		if (token->type == DEPTHDOWN) return NULL;
+		if (token->type == DEPTHDOWN) return code;
 		else if (code->funcid == NIL && token->type == FUNC) 
 			code->funcid = getfuncid(token->data);
 		else if (token->type == ARG){
-			code->vararguments[argcount] = getvarid(token->data);
 			code->literalarguments[argcount] = litteraltoll(token->data);
+			if (code->literalarguments[argcount] != NULL) {
+				code->vararguments[argcount] = -1;
+			} else {
+				code->varargumentsnames[argcount] = token->data;
+			}
 			argcount++;
 		} else if (code->funcid != NIL && token->type == DEPTHUP){
-			code->functionargs[argcount] = parse(token->next);
+			code->functionargs[argcount] = lispparse(token->next);
+			int depth = 1;
+			while (depth != 0){
+				token = token->next;
+				if (token->type == DEPTHUP) depth++;
+				else if (token->type == DEPTHDOWN) depth--;
+			}
 			argcount++;
 		}
 		token = token->next;
@@ -209,10 +265,11 @@ lispcodenode *parse(dictionaryll *tokens){
 
 toktype prev;
 //# converts an expression into a linked list of tokens
-dictionaryll *lexer(char *exp){ 
+dictionaryll *lisplexer(char *exp){ 
 	if (exp[0] == '\0') {
 		return NULL;
 	}
+	while (exp[0] == ' ') exp++;
 
 	char *tmp;
 	dictionaryll *dict = malloc(sizeof(dictionaryll));
@@ -221,21 +278,21 @@ dictionaryll *lexer(char *exp){
 		dict->data = NULL;
 		dict->type = DEPTHUP;
 		prev = DEPTHUP;
-		dict->next = lexer(exp+1);
+		dict->next = lisplexer(exp+1);
 	} else if (exp[0] == ')') {
 		dict->data = NULL;
 		dict->type = DEPTHDOWN;
 		prev = DEPTHDOWN;
-		dict->next = lexer(exp+1);
+		dict->next = lisplexer(exp+1);
 	} else if (prev == DEPTHUP){
 		dict->data = readuntil(exp, " )");
 		dict->type = FUNC;
 		prev = FUNC;
-		dict->next = lexer(exp+readlen+1);
-	} else if (prev == FUNC || prev == ARG){
+		dict->next = lisplexer(exp+readlen+1);
+	} else if (prev == FUNC || prev == ARG || prev == DEPTHDOWN){
 		dict->data = readuntil(exp, " )");
 		dict->type = ARG;
-		dict->next = lexer(exp+readlen+1);
+		dict->next = lisplexer(exp+readlen);
 	}
 
 	return dict;
@@ -243,81 +300,10 @@ dictionaryll *lexer(char *exp){
 
 
 int main(){
-	parse(lexer("(print (+ (- 2 3) 2))"));
-	lispll *varname1 = malloc(sizeof(lispll));
-	varname1->data = 'a';
-	varname1->next = malloc(sizeof(lispll));
-	varname1->next->data = '\0';
-
-	lispll *varname2 = malloc(sizeof(lispll));
-	varname2->data = 'b';
-	varname2->next = malloc(sizeof(lispll));
-	varname2->next->data = '\0';
-
-	lispll *varname3 = malloc(sizeof(lispll));
-	varname3->data = 'c';
-	varname3->next = malloc(sizeof(lispll));
-	varname3->next->data = '\0';
-
-	lispll *var = malloc(sizeof(lispll));
-	var->data = 2;
-
-	lispll *var2 = malloc(sizeof(lispll));
-	var2->data = 1;
-
-	lispcodenode *code1 = malloc(sizeof(lispcodenode));
-
-	// define var 1
-	code1->funcid = 0;
-	code1->literalarguments[0] = varname1;
-	code1->vararguments[0] = -1;
-
-	exec(code1);
-	// asign var 1
-	code1->funcid = 1;
-	code1->literalarguments[0] = varname1;
-	code1->literalarguments[1] = var;
-	code1->vararguments[0] = -1;
-	code1->vararguments[1] = -1;
-	exec(code1);
-
-	// define var 2
-	code1->funcid = 0;
-	code1->literalarguments[0] = varname2;
-	code1->vararguments[0] = -1;
-	exec(code1);
-
-	// asign var 2
-	code1->funcid = 1;
-	code1->literalarguments[0] = varname2;
-	code1->literalarguments[1] = var2;
-	code1->vararguments[0] = -1;
-	code1->vararguments[1] = -1;
-
-	exec(code1);
-
-
-	// define var 3
-	code1->funcid = 0;
-	code1->literalarguments[0] = varname3;
-	code1->vararguments[0] = -1;
-	exec(code1);
-
-	// make the add function	
-	lispcodenode *code2 = malloc(sizeof(lispcodenode));
-	code2->funcid = 2;
-	code2->vararguments[0] = 0;
-	code2->vararguments[1] = 1;
-
-	// asign var 3
-	code1->funcid = 1;
-	code1->literalarguments[0] = varname3;
-	code1->functionargs[1] = code2;
-	code1->vararguments[0] = -1;
-	code1->vararguments[1] = -1;
-	exec(code1);
-
-	code1->funcid = 4;
-	code1->vararguments[0] = 2;
-	exec(code1);
+	lispexec(lispparse(lisplexer("(def \"a\" (* 2 5))")));
+	lispexec(lispparse(lisplexer("(def \"b\" (* a 5))")));
+	lispexec(lispparse(lisplexer("(def \"c\" \"test\")")));
+	lispexec(lispparse(lisplexer("(printint b)")));
+	lispexec(lispparse(lisplexer("(printstr \"hello\")")));
+	lispexec(lispparse(lisplexer("(printstr c)")));
 }
